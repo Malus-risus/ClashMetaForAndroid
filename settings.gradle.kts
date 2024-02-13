@@ -33,7 +33,7 @@ dependencyResolutionManagement {
             val material = "1.6.1"
             val serialization = "1.3.3"
             val kaidl = "1.15"
-            val room = "2.4.2"
+            val room = "2.6.1"
             val multiprocess = "1.0.0"
 
             library("build-android", "com.android.tools.build:gradle:$agp")
