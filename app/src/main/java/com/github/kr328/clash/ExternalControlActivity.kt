@@ -22,88 +22,62 @@ import kotlinx.coroutines.launch
 import java.util.*
 
 class ExternalControlActivity : Activity(), CoroutineScope by MainScope() {
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    handleIntent()
+  }
 
-    private val startForResult = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        // Handle the results of PropertiesActivity here if necessary.
+  private fun handleIntent() {
+    when (intent.action) {
+      Intent.ACTION_VIEW -> handleActionView()
+      Intents.ACTION_TOGGLE_CLASH -> toggleClash()
+      Intents.ACTION_START_CLASH -> startClash()
+      Intents.ACTION_STOP_CLASH -> stopClash()
     }
+  }
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        when (intent.action) {
-            Intent.ACTION_VIEW -> handleActionView()
-            Intents.ACTION_TOGGLE_CLASH -> toggleClash()
-            Intents.ACTION_START_CLASH -> startClash()
-            Intents.ACTION_STOP_CLASH -> stopClash()
+  private fun handleActionView() {
+    val uri = intent.data ?: return finish()
+    val url = uri.getQueryParameter("url") ?: return finish()
+    launch {
+      withProfile {
+        val type = when (uri.getQueryParameter("type")?.lowercase(Locale.getDefault())) {
+          "url" -> Profile.Type.Url
+          "file" -> Profile.Type.File
+          else -> Profile.Type.Url
         }
-        finish()
-    }
+        val name = uri.getQueryParameter("name") ?: getString(R.string.new_profile)
 
-    private fun handleActionView() {
-        val uri = intent?.data ?: return
-        val url = uri.getQueryParameter("url") ?: return
-
-        launch {
-            val uuid = withProfile {
-                val type = when (uri.getQueryParameter("type")?.lowercase(Locale.getDefault())) {
-                    "url" -> Profile.Type.Url
-                    "file" -> Profile.Type.File
-                    else -> Profile.Type.Url
-                }
-                val name = uri.getQueryParameter("name") ?: getString(R.string.new_profile)
-
-                create(type, name).also {
-                    patch(it, name, url, 0)
-                }
-            }
-            val intent = PropertiesActivity::class.intent.setUUID(uuid)
-            startForResult.launch(intent)
+        create(type, name).also {
+          it.patch(name, url, 0)
+          startActivity(PropertiesActivity::class.intent.setUUID(it.uuid))
         }
+      }
     }
+  }
 
-    private fun toggleClash() {
-        if (Remote.broadcasts.clashRunning) {
-            stopClashServiceWithToast()
-        } else {
-            startClashServiceWithToast()
-        }
-    }
+  private fun toggleClash() = if (Remote.broadcasts.clashRunning) stopClash() else startClash()
 
-    private fun startClash() {
-        if (!Remote.broadcasts.clashRunning) {
-            startClashServiceWithToast()
-        } else {
-            showToastIfRunning(R.string.external_control_started)
-        }
+  private fun startClash() {
+    if (!Remote.broadcasts.clashRunning) {
+      startClashService()?.let {
+        showToast(R.string.unable_to_start_vpn)
+      } ?: showToast(R.string.external_control_started)
+    } else {
+      showToast(R.string.external_control_started)
     }
+  }
 
-    private fun stopClash() {
-        if (Remote.broadcasts.clashRunning) {
-            stopClashServiceWithToast()
-        } else {
-            showToastIfRunning(R.string.external_control_stopped)
-        }
+  private fun stopClash() {
+    if (Remote.broadcasts.clashRunning) {
+      stopClashService()
+      showToast(R.string.external_control_stopped)
+    } else {
+      showToast(R.string.external_control_stopped)
     }
+  }
 
-    private fun startClashServiceWithToast() {
-        val vpnRequest = startClashService()
-        if (vpnRequest != null) {
-            showToast(R.string.unable_to_start_vpn)
-        } else {
-            showToast(R.string.external_control_started)
-        }
-    }
-
-    private fun stopClashServiceWithToast() {
-        stopClashService()
-        showToast(R.string.external_control_stopped)
-    }
-
-    private fun showToast(messageResId: Int) {
-        Toast.makeText(this, messageResId, Toast.LENGTH_LONG).show()
-    }
-
-    private fun showToastIfRunning(messageResId: Int) {
-        showToast(messageResId)
-    }
+  private fun showToast(messageResId: Int) {
+    Toast.makeText(this, messageResId, Toast.LENGTH_LONG).show()
+  }
 }
