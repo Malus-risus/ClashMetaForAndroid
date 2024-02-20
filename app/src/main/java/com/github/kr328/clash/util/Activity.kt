@@ -20,7 +20,6 @@ class ActivityResultLifecycle : LifecycleOwner {
     suspend fun <T> use(block: suspend (lifecycle: ActivityResultLifecycle, start: () -> Unit) -> T): T {
         return try {
             markCreated()
-
             block(this, this::markStarted)
         } finally {
             withContext(NonCancellable) {
@@ -34,8 +33,11 @@ class ActivityResultLifecycle : LifecycleOwner {
     }
 
     private fun markStarted() {
-        lifecycle.currentState = Lifecycle.State.STARTED
-        lifecycle.currentState = Lifecycle.State.RESUMED
+        // Combine setting state STARTED and RESUMED in a single transaction
+        with(lifecycle) {
+            currentState = Lifecycle.State.STARTED
+            currentState = Lifecycle.State.RESUMED
+        }
     }
 
     private fun markDestroy() {
