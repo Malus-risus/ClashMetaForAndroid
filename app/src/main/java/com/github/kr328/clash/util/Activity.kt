@@ -3,42 +3,32 @@ package com.github.kr328.clash.util
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.coroutineScope
 
 class ActivityResultLifecycle : LifecycleOwner {
-    private val lifecycle = LifecycleRegistry(this)
-
-    init {
-        lifecycle.currentState = Lifecycle.State.INITIALIZED
+    private val lifecycle = LifecycleRegistry(this).apply {
+        currentState = Lifecycle.State.INITIALIZED
     }
 
-    override fun getLifecycle(): Lifecycle {
-        return lifecycle
-    }
+    override fun getLifecycle(): Lifecycle = lifecycle
 
     suspend fun <T> use(block: suspend (lifecycle: ActivityResultLifecycle, start: () -> Unit) -> T): T {
-        return try {
-            markCreated()
-
-            block(this, this::markStarted)
+        markState(Lifecycle.State.CREATED)
+        try {
+            return block(this, this::markResumed)
         } finally {
-            withContext(NonCancellable) {
-                markDestroy()
-            }
+            markState(Lifecycle.State.DESTROYED)
         }
     }
 
-    private fun markCreated() {
-        lifecycle.currentState = Lifecycle.State.CREATED
+    private fun markResumed() {
+        markState(Lifecycle.State.STARTED)
+        markState(Lifecycle.State.RESUMED)
     }
 
-    private fun markStarted() {
-        lifecycle.currentState = Lifecycle.State.STARTED
-        lifecycle.currentState = Lifecycle.State.RESUMED
-    }
-
-    private fun markDestroy() {
-        lifecycle.currentState = Lifecycle.State.DESTROYED
+    private fun markState(state: Lifecycle.State) {
+        coroutineScope {
+            lifecycle.currentState = state
+        }
     }
 }
