@@ -3,7 +3,7 @@
   "labels": [
     "dependencies"
   ],
-  "extends": ["config:recommended", ":dependencyDashboard"],
+  "extends": ["config:base"],
   "packageRules": [
     {
       "groupName": "Kotlin, KSP and MoshiX",
