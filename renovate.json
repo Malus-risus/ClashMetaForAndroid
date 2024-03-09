@@ -6,6 +6,7 @@
   "packageRules": [
     {
       "matchCategories": ["java"]
+    }
       ]
     }
   ]
