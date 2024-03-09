@@ -6,7 +6,13 @@
   "extends": ["config:recommended", ":dependencyDashboard"],
   "packageRules": [
     {
-      "matchCategories": ["java"]
+      "groupName": "Kotlin, KSP and MoshiX",
+      "matchPackagePrefixes": [
+        "com.google.devtools.ksp",
+        "dev.zacsweers.moshix"
+      ],
+      "matchPackagePatterns": [
+        "org.jetbrains.kotlin.*"
     }
   ]
 }
