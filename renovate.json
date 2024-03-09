@@ -5,12 +5,7 @@
   "extends": ["config:recommended", ":dependencyDashboard"],
   "packageRules": [
     {
-      "groupName": "Kotlin, KSP",
-      "matchPackagePrefixes": [
-        "com.google.devtools.ksp"
-      ],
-      "matchPackagePatterns": [
-        "org.jetbrains.kotlin.*"
+      "matchCategories": ["java"]
       ]
     }
   ]
