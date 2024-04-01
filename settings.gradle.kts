@@ -19,10 +19,10 @@ dependencyResolutionManagement {
     versionCatalogs {
         create("libs") {
             val agp = "7.2.1"
-            val kotlin = "1.7.0"
+            val kotlin = "1.9.23"
             val ksp = "$kotlin-1.0.6"
             val golang = "1.0.4"
-            val coroutine = "1.7.3"
+            val coroutine = "1.8.0"
             val coreKtx = "1.8.0"
             val activity = "1.5.0"
             val fragment = "1.5.0"
@@ -31,7 +31,7 @@ dependencyResolutionManagement {
             val recyclerview = "1.2.1"
             val viewpager = "1.0.0"
             val material = "1.6.1"
-            val serialization = "1.3.3"
+            val serialization = "1.6.3"
             val kaidl = "1.15"
             val room = "2.4.2"
             val multiprocess = "1.0.0"
