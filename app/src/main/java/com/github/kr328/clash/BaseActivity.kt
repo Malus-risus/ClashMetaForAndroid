@@ -6,7 +6,10 @@ import android.os.Bundle
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContract
 import androidx.appcompat.app.AppCompatActivity
-import com.github.kr328.clash.common.compat.*
+import com.github.kr328.clash.common.compat.isAllowForceDarkCompat
+import com.github.kr328.clash.common.compat.isLightNavigationBarCompat
+import com.github.kr328.clash.common.compat.isLightStatusBarsCompat
+import com.github.kr328.clash.common.compat.isSystemBarsTranslucentCompat
 import com.github.kr328.clash.core.bridge.ClashException
 import com.github.kr328.clash.design.Design
 import com.github.kr328.clash.design.model.DarkMode
@@ -26,7 +29,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
-abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope by MainScope(), Broadcasts.Observer {
+abstract class BaseActivity<D : Design<*>> :
+    AppCompatActivity(),
+    CoroutineScope by MainScope(),
+    Broadcasts.Observer {
     enum class Event {
         ServiceRecreated,
         ActivityStart,
@@ -39,54 +45,85 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope
         ProfileUpdateFailed
     }
 
-    protected val uiStore = UiStore(this)
-
-    protected val events = Channel<Event>(64)
-
+    protected val uiStore by lazy { UiStore(this) }
+    protected val events = Channel<Event>(Channel.UNLIMITED)
     protected var activityStarted: Boolean = false
-
     protected val clashRunning: Boolean
         get() = Remote.broadcasts.clashRunning
-        
     protected var design: D? = null
-        set(value) {
+        private set(value) {
             field = value
-            setContentView(value?.root ?: View(this))
+
+            if (value != null) {
+                setContentView(value.root)
+            } else {
+                setContentView(View(this))
+            }
         }
-    
+
     private var defer: suspend () -> Unit = {}
     private var deferRunning = false
     private val nextRequestKey = AtomicInteger(0)
     private var dayNight: DayNight = DayNight.Day
-    
+
     protected abstract suspend fun main()
-    
+
+    fun defer(operation: suspend () -> Unit) {
+        this.defer = operation
+    }
+
+    suspend fun <I, O> startActivityForResult(
+        contracts: ActivityResultContract<I, O>,
+        input: I
+    ): O = withContext(Dispatchers.Main) {
+        val requestKey = nextRequestKey.getAndIncrement().toString()
+
+        ActivityResultLifecycle().use { lifecycle, start ->
+            suspendCoroutine { c ->
+                activityResultRegistry.register(requestKey, lifecycle, contracts) {
+                    c.resumeWith(Result.success(it))
+                }.apply { start() }.launch(input)
+            }
+        }
+    }
+
+    suspend fun setContentDesign(design: D) = withContext(Dispatchers.Main) {
+        this@BaseActivity.design = design
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         applyDayNight()
+
         launch {
             main()
+
             finish()
         }
     }
-    
+
     override fun onStart() {
         super.onStart()
+
         activityStarted = true
-        Remote.broadcasts.addObserver(this)
-        events.trySend(Event.ActivityStart)
+
+        handleActivityStartStop(Event.ActivityStart)
     }
 
     override fun onStop() {
         super.onStop()
+
         activityStarted = false
-        Remote.broadcasts.removeObserver(this)
-        events.trySend(Event.ActivityStop)
+
+        handleActivityStartStop(Event.ActivityStop)
     }
 
     override fun onDestroy() {
         design?.cancel()
+
         cancel()
+
         super.onDestroy()
     }
 
@@ -94,7 +131,9 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope
         if (deferRunning) {
             return
         }
+
         deferRunning = true
+
         launch {
             try {
                 defer()
@@ -108,6 +147,7 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+
         if (queryDayNight(newConfig) != dayNight) {
             ApplicationObserver.createdActivities.forEach {
                 it.recreate()
@@ -115,8 +155,13 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope
         }
     }
 
+    open fun shouldDisplayHomeAsUpEnabled(): Boolean {
+        return true
+    }
+
     override fun onSupportNavigateUp(): Boolean {
         this.onBackPressed()
+
         return true
     }
 
@@ -146,6 +191,7 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope
 
     override fun onStopped(cause: String?) {
         events.trySend(Event.ClashStop)
+
         if (cause != null && activityStarted) {
             launch {
                 design?.showExceptionToast(ClashException(cause))
@@ -153,26 +199,6 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope
         }
     }
 
-    private fun applyDayNight(config: Configuration = resources.configuration) {
-        dayNight = queryDayNight(config)
-        theme.applyStyle(when (dayNight) {
-            DayNight.Night -> R.style.AppThemeDark
-            DayNight.Day -> R.style.AppThemeLight
-        }, true)
-        window.apply {
-            isAllowForceDarkCompat = false
-            isSystemBarsTranslucentCompat = true
-            statusBarColor = resolveThemedColor(android.R.attr.statusBarColor)
-            navigationBarColor = resolveThemedColor(android.R.attr.navigationBarColor)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                isLightStatusBarsCompat = resolveThemedBoolean(android.R.attr.windowLightStatusBar)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                isLightNavigationBarCompat = resolveThemedBoolean(android.R.attr.windowLightNavigationBar)
-            }
-        }
-    }
-    
     private fun queryDayNight(config: Configuration = resources.configuration): DayNight {
         return when (uiStore.darkMode) {
             DarkMode.Auto -> {
@@ -181,8 +207,52 @@ abstract class BaseActivity<D : Design<*>> : AppCompatActivity(), CoroutineScope
                 else
                     DayNight.Day
             }
-            DarkMode.ForceLight -> DayNight.Day
-            DarkMode.ForceDark -> DayNight.Night
+            DarkMode.ForceLight -> {
+                DayNight.Day
+            }
+            DarkMode.ForceDark -> {
+                DayNight.Night
+            }
         }
+    }
+
+    private fun applyDayNight(config: Configuration = resources.configuration) {
+        val dayNight = queryDayNight(config)
+
+        when (dayNight) {
+            DayNight.Night -> {
+                theme.applyStyle(R.style.AppThemeDark, true)
+            }
+            DayNight.Day -> {
+                theme.applyStyle(R.style.AppThemeLight, true)
+            }
+        }
+
+        window.isAllowForceDarkCompat = false
+        window.isSystemBarsTranslucentCompat = true
+
+        window.statusBarColor = resolveThemedColor(android.R.attr.statusBarColor)
+        window.navigationBarColor = resolveThemedColor(android.R.attr.navigationBarColor)
+
+        if (Build.VERSION.SDK_INT >= 23) {
+            window.isLightStatusBarsCompat =
+                resolveThemedBoolean(android.R.attr.windowLightStatusBar)
+        }
+
+        if (Build.VERSION.SDK_INT >= 27) {
+            window.isLightNavigationBarCompat =
+                resolveThemedBoolean(android.R.attr.windowLightNavigationBar)
+        }
+
+        this.dayNight = dayNight
+    }
+
+    private fun handleActivityStartStop(event: Event) {
+        if (activityStarted) {
+            Remote.broadcasts.addObserver(this)
+        } else {
+            Remote.broadcasts.removeObserver(this)
+        }
+        events.trySend(event)
     }
 }
