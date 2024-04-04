@@ -19,9 +19,7 @@ import java.util.concurrent.TimeUnit
 class MainActivity : BaseActivity<MainDesign>() {
     override suspend fun main() {
         val design = MainDesign(this)
-
         setContentDesign(design)
-
         design.fetch()
 
         while (isActive) {
@@ -41,13 +39,9 @@ class MainActivity : BaseActivity<MainDesign>() {
 
     private suspend fun handleEvents(event: Event, design: MainDesign) {
         when (event) {
-            Event.ActivityStart,
-            Event.ServiceRecreated,
-            Event.ClashStop,
-            Event.ClashStart,
-            Event.ProfileLoaded,
-            Event.ProfileChanged -> design.fetch()
-            // No action for other events
+            Event.ActivityStart, Event.ServiceRecreated, Event.ClashStop, Event.ClashStart,
+            Event.ProfileLoaded, Event.ProfileChanged -> design.fetch()
+            else -> Unit
         }
     }
 
@@ -76,50 +70,21 @@ class MainActivity : BaseActivity<MainDesign>() {
 
     private suspend fun MainDesign.fetch() {
         withContext(Dispatchers.IO) {
-            val state = withClash {
-                try {
-                    queryTunnelState()
-                } catch (e: Exception) {
-                    null
-                }
-            }
-
-            val providers = withClash {
-                try {
-                    queryProviders()
-                } catch (e: Exception) {
-                    emptyList<Provider>()
-                }
-            }
-
-            val activeProfile = withProfile {
-                try {
-                    queryActive()
-                } catch (e: Exception) {
-                    null
-                }
-            }
+            val state = withClash { queryTunnelState() }
+            val providers = withClash { queryProviders() }
+            val activeProfile = withProfile { queryActive() }
 
             withContext(Dispatchers.Main) {
-                if (state != null) {
-                    setMode(state.mode)
-                }
+                setMode(state?.mode ?: "direct")
                 setHasProviders(providers.isNotEmpty())
-                setProfileName(activeProfile?.name)
+                setProfileName(activeProfile?.name ?: "None")
             }
         }
     }
 
     private suspend fun MainDesign.fetchTraffic() {
         withContext(Dispatchers.IO) {
-            val traffic = withClash {
-                try {
-                    queryTrafficTotal()
-                } catch (e: Exception) {
-                    0L
-                }
-            }
-
+            val traffic = withClash { queryTrafficTotal() }
             withContext(Dispatchers.Main) {
                 setForwarded(traffic)
             }
@@ -128,12 +93,8 @@ class MainActivity : BaseActivity<MainDesign>() {
 
     private suspend fun queryAppVersionName(): String {
         return withContext(Dispatchers.IO) {
-            try {
-                packageManager.getPackageInfo(packageName, 0).versionName + "\n" +
-                Bridge.nativeCoreVersion().replace("_", "-")
-            } catch (e: Exception) {
-                "Unknown"
-            }
+            packageManager.getPackageInfo(packageName, 0).versionName + "\n" +
+            Bridge.nativeCoreVersion().replace("_", "-")
         }
     }
 }
