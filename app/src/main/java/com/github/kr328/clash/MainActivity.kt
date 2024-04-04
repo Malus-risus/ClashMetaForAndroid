@@ -13,21 +13,24 @@ import com.github.kr328.clash.core.bridge.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 class MainActivity : BaseActivity<MainDesign>() {
-    private val design by lazy { MainDesign(this) }
+    private lateinit var design: MainDesign
 
     override suspend fun main() {
+        design = MainDesign(this)
         setContentDesign(design)
+
         design.fetch()
 
         val ticker = ticker(TimeUnit.SECONDS.toMillis(1))
 
         while (isActive) {
             select<Unit> {
-                events.onReceive { event ->
-                    when (event) {
+                events.onReceive {
+                    when (it) {
                         Event.ActivityStart,
                         Event.ServiceRecreated,
                         Event.ClashStop, Event.ClashStart,
@@ -35,8 +38,29 @@ class MainActivity : BaseActivity<MainDesign>() {
                         else -> Unit
                     }
                 }
-                design.requests.onReceive { request ->
-                    handleDesignRequest(request)
+                design.requests.onReceive {
+                    when (it) {
+                        MainDesign.Request.ToggleStatus -> {
+                            if (clashRunning)
+                                stopClashService()
+                            else
+                                design.startClash()
+                        }
+                        MainDesign.Request.OpenProxy ->
+                            startActivity(ProxyActivity::class.intent)
+                        MainDesign.Request.OpenProfiles ->
+                            startActivity(ProfilesActivity::class.intent)
+                        MainDesign.Request.OpenProviders ->
+                            startActivity(ProvidersActivity::class.intent)
+                        MainDesign.Request.OpenLogs ->
+                            startActivity(LogsActivity::class.intent)
+                        MainDesign.Request.OpenSettings ->
+                            startActivity(SettingsActivity::class.intent)
+                        MainDesign.Request.OpenHelp ->
+                            startActivity(HelpActivity::class.intent)
+                        MainDesign.Request.OpenAbout ->
+                            design.showAbout(queryAppVersionName())
+                    }
                 }
                 if (clashRunning) {
                     ticker.onReceive {
@@ -47,45 +71,18 @@ class MainActivity : BaseActivity<MainDesign>() {
         }
     }
 
-    private suspend fun handleDesignRequest(request: MainDesign.Request) {
-        when (request) {
-            MainDesign.Request.ToggleStatus -> {
-                if (clashRunning) stopClashService() else startClashService()
-            }
-            MainDesign.Request.OpenProxy -> {
-                startActivity(ProxyActivity::class.intent)
-            }
-            MainDesign.Request.OpenProfiles -> {
-                startActivity(ProfilesActivity::class.intent)
-            }
-            MainDesign.Request.OpenProviders -> {
-                startActivity(ProvidersActivity::class.intent)
-            }
-            MainDesign.Request.OpenLogs -> {
-                startActivity(LogsActivity::class.intent)
-            }
-            MainDesign.Request.OpenSettings -> {
-                startActivity(SettingsActivity::class.intent)
-            }
-            MainDesign.Request.OpenHelp -> {
-                startActivity(HelpActivity::class.intent)
-            }
-            MainDesign.Request.OpenAbout -> {
-                design.showAbout(queryAppVersionName())
-            }
-        }
-    }
-
     private suspend fun MainDesign.fetch() {
-        val state = withClash {
-            queryTunnelState()
+        withClash {
+            val state = queryTunnelState()
+            val providers = queryProviders()
+
+            withContext(Dispatchers.Main) {
+                setClashRunning(clashRunning)
+                setMode(state.mode)
+                setHasProviders(providers.isNotEmpty())
+            }
         }
-        val providers = withClash {
-            queryProviders()
-        }
-        setClashRunning(clashRunning)
-        setMode(state.mode)
-        setHasProviders(providers.isNotEmpty())
+
         withProfile {
             setProfileName(queryActive()?.name)
         }
@@ -97,23 +94,25 @@ class MainActivity : BaseActivity<MainDesign>() {
         }
     }
 
-    private suspend fun MainDesign.startClash(){
+    private suspend fun MainDesign.startClash() {
         val active = withProfile { queryActive() }
-        
+
         if (active == null || !active.imported) {
             showToast(R.string.no_profile_selected, ToastDuration.Long) {
                 setAction(R.string.profiles) {
                     startActivity(ProfilesActivity::class.intent)
                 }
             }
-
             return
         }
 
         val vpnRequest = startClashService()
 
         if (vpnRequest != null) {
-            val result = startActivityForResult(ActivityResultContracts.StartActivityForResult(), vpnRequest)
+            val result = startActivityForResult(
+                ActivityResultContracts.StartActivityForResult(),
+                vpnRequest
+            )
 
             if (result.resultCode == RESULT_OK)
                 startClashService()
