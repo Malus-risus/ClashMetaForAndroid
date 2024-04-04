@@ -19,66 +19,61 @@ import java.util.concurrent.TimeUnit
 class MainActivity : BaseActivity<MainDesign>() {
     override suspend fun main() {
         val design = MainDesign(this)
-
         setContentDesign(design)
-
         design.fetch()
 
-        val ticker = ticker(TimeUnit.SECONDS.toMillis(1))
+        // Optimized by increasing the delay to reduce the frequency of UI updates
+        val ticker = ticker(TimeUnit.SECONDS.toMillis(5))
 
         while (isActive) {
             select<Unit> {
                 events.onReceive {
-                    when (it) {
-                        Event.ActivityStart,
-                        Event.ServiceRecreated,
-                        Event.ClashStop, Event.ClashStart,
-                        Event.ProfileLoaded, Event.ProfileChanged -> design.fetch()
-                        else -> Unit
-                    }
+                    handleEvents(it, design)
                 }
                 design.requests.onReceive {
-                    when (it) {
-                        MainDesign.Request.ToggleStatus -> {
-                            if (clashRunning)
-                                stopClashService()
-                            else
-                                design.startClash()
-                        }
-                        MainDesign.Request.OpenProxy ->
-                            startActivity(ProxyActivity::class.intent)
-                        MainDesign.Request.OpenProfiles ->
-                            startActivity(ProfilesActivity::class.intent)
-                        MainDesign.Request.OpenProviders ->
-                            startActivity(ProvidersActivity::class.intent)
-                        MainDesign.Request.OpenLogs ->
-                            startActivity(LogsActivity::class.intent)
-                        MainDesign.Request.OpenSettings ->
-                            startActivity(SettingsActivity::class.intent)
-                        MainDesign.Request.OpenHelp ->
-                            startActivity(HelpActivity::class.intent)
-                        MainDesign.Request.OpenAbout ->
-                            design.showAbout(queryAppVersionName())
-                    }
+                    handleDesignRequests(it, design)
                 }
-                if (clashRunning) {
-                    ticker.onReceive {
-                        design.fetchTraffic()
-                    }
+                if (clashRunning) ticker.onReceive {
+                    design.fetchTraffic()
                 }
             }
+        }
+    }
+
+    private fun handleEvents(event: Event, design: MainDesign) {
+        when (event) {
+            Event.ActivityStart,
+            Event.ServiceRecreated,
+            Event.ClashStop,
+            Event.ClashStart,
+            Event.ProfileLoaded,
+            Event.ProfileChanged -> design.fetch()
+        }
+    }
+
+    private suspend fun handleDesignRequests(request: MainDesign.Request, design: MainDesign) {
+        when (request) {
+            MainDesign.Request.ToggleStatus -> {
+                if (clashRunning)
+                    stopClashService()
+                else
+                    design.startClash()
+            }
+            MainDesign.Request.OpenProxy -> startActivity(ProxyActivity::class.intent)
+            MainDesign.Request.OpenProfiles -> startActivity(ProfilesActivity::class.intent)
+            MainDesign.Request.OpenProviders -> startActivity(ProvidersActivity::class.intent)
+            MainDesign.Request.OpenLogs -> startActivity(LogsActivity::class.intent)
+            MainDesign.Request.OpenSettings -> startActivity(SettingsActivity::class.intent)
+            MainDesign.Request.OpenHelp -> startActivity(HelpActivity::class.intent)
+            MainDesign.Request.OpenAbout -> design.showAbout(queryAppVersionName())
         }
     }
 
     private suspend fun MainDesign.fetch() {
         setClashRunning(clashRunning)
 
-        val state = withClash {
-            queryTunnelState()
-        }
-        val providers = withClash {
-            queryProviders()
-        }
+        val state = withClash { queryTunnelState() }
+        val providers = withClash { queryProviders() }
 
         setMode(state.mode)
         setHasProviders(providers.isNotEmpty())
@@ -126,7 +121,8 @@ class MainActivity : BaseActivity<MainDesign>() {
 
     private suspend fun queryAppVersionName(): String {
         return withContext(Dispatchers.IO) {
-            packageManager.getPackageInfo(packageName, 0).versionName + "\n" + Bridge.nativeCoreVersion().replace("_", "-")
+            packageManager.getPackageInfo(packageName, 0).versionName + "\n" +
+                    Bridge.nativeCoreVersion().replace("_", "-")
         }
     }
 }
