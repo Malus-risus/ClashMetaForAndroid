@@ -2,7 +2,6 @@ package com.github.kr328.clash
 
 import androidx.activity.result.contract.ActivityResultContracts
 import com.github.kr328.clash.common.util.intent
-import com.github.kr328.clash.common.util.ticker
 import com.github.kr328.clash.design.MainDesign
 import com.github.kr328.clash.design.ui.ToastDuration
 import com.github.kr328.clash.util.startClashService
@@ -11,36 +10,36 @@ import com.github.kr328.clash.util.withClash
 import com.github.kr328.clash.util.withProfile
 import com.github.kr328.clash.core.bridge.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.tryReceive
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 class MainActivity : BaseActivity<MainDesign>() {
     override suspend fun main() {
         val design = MainDesign(this)
+
         setContentDesign(design)
+
         design.fetch()
 
-        // Optimized by increasing the delay to reduce the frequency of UI updates
-        val ticker = ticker(TimeUnit.SECONDS.toMillis(5))
-
         while (isActive) {
-            select<Unit> {
-                events.onReceive {
-                    handleEvents(it, design)
-                }
-                design.requests.onReceive {
-                    handleDesignRequests(it, design)
-                }
-                if (clashRunning) ticker.onReceive {
-                    design.fetchTraffic()
-                }
+            val nextEvent = events.tryReceive().getOrNull()
+            val nextRequest = if (clashRunning) design.requests.tryReceive().getOrNull() else null
+
+            nextEvent?.let { handleEvents(it, design) }
+            nextRequest?.let { handleRequests(it, design) }
+
+            if (clashRunning) {
+                design.fetchTraffic()
             }
+
+            delay(TimeUnit.SECONDS.toMillis(1))
         }
     }
 
-    private fun handleEvents(event: Event, design: MainDesign) {
+    private suspend fun handleEvents(event: Event, design: MainDesign) {
         when (event) {
             Event.ActivityStart,
             Event.ServiceRecreated,
@@ -48,17 +47,13 @@ class MainActivity : BaseActivity<MainDesign>() {
             Event.ClashStart,
             Event.ProfileLoaded,
             Event.ProfileChanged -> design.fetch()
+            // No action for other events
         }
     }
 
-    private suspend fun handleDesignRequests(request: MainDesign.Request, design: MainDesign) {
+    private suspend fun handleRequests(request: MainDesign.Request, design: MainDesign) {
         when (request) {
-            MainDesign.Request.ToggleStatus -> {
-                if (clashRunning)
-                    stopClashService()
-                else
-                    design.startClash()
-            }
+            MainDesign.Request.ToggleStatus -> toggleClashStatus()
             MainDesign.Request.OpenProxy -> startActivity(ProxyActivity::class.intent)
             MainDesign.Request.OpenProfiles -> startActivity(ProfilesActivity::class.intent)
             MainDesign.Request.OpenProviders -> startActivity(ProvidersActivity::class.intent)
@@ -69,60 +64,76 @@ class MainActivity : BaseActivity<MainDesign>() {
         }
     }
 
+    private fun toggleClashStatus() {
+        if (clashRunning) {
+            stopClashService()
+        } else {
+            CoroutineScope(Dispatchers.Main).launch {
+                design?.startClash()
+            }
+        }
+    }
+
     private suspend fun MainDesign.fetch() {
-        setClashRunning(clashRunning)
+        withContext(Dispatchers.IO) {
+            val state = withClash {
+                try {
+                    queryTunnelState()
+                } catch (e: Exception) {
+                    null
+                }
+            }
 
-        val state = withClash { queryTunnelState() }
-        val providers = withClash { queryProviders() }
+            val providers = withClash {
+                try {
+                    queryProviders()
+                } catch (e: Exception) {
+                    emptyList<Provider>()
+                }
+            }
 
-        setMode(state.mode)
-        setHasProviders(providers.isNotEmpty())
+            val activeProfile = withProfile {
+                try {
+                    queryActive()
+                } catch (e: Exception) {
+                    null
+                }
+            }
 
-        withProfile {
-            setProfileName(queryActive()?.name)
+            withContext(Dispatchers.Main) {
+                if (state != null) {
+                    setMode(state.mode)
+                }
+                setHasProviders(providers.isNotEmpty())
+                setProfileName(activeProfile?.name)
+            }
         }
     }
 
     private suspend fun MainDesign.fetchTraffic() {
-        withClash {
-            setForwarded(queryTrafficTotal())
-        }
-    }
-
-    private suspend fun MainDesign.startClash() {
-        val active = withProfile { queryActive() }
-
-        if (active == null || !active.imported) {
-            showToast(R.string.no_profile_selected, ToastDuration.Long) {
-                setAction(R.string.profiles) {
-                    startActivity(ProfilesActivity::class.intent)
+        withContext(Dispatchers.IO) {
+            val traffic = withClash {
+                try {
+                    queryTrafficTotal()
+                } catch (e: Exception) {
+                    0L
                 }
             }
 
-            return
-        }
-
-        val vpnRequest = startClashService()
-
-        try {
-            if (vpnRequest != null) {
-                val result = startActivityForResult(
-                    ActivityResultContracts.StartActivityForResult(),
-                    vpnRequest
-                )
-
-                if (result.resultCode == RESULT_OK)
-                    startClashService()
+            withContext(Dispatchers.Main) {
+                setForwarded(traffic)
             }
-        } catch (e: Exception) {
-            design?.showToast(R.string.unable_to_start_vpn, ToastDuration.Long)
         }
     }
 
     private suspend fun queryAppVersionName(): String {
         return withContext(Dispatchers.IO) {
-            packageManager.getPackageInfo(packageName, 0).versionName + "\n" +
-                    Bridge.nativeCoreVersion().replace("_", "-")
+            try {
+                packageManager.getPackageInfo(packageName, 0).versionName + "\n" +
+                Bridge.nativeCoreVersion().replace("_", "-")
+            } catch (e: Exception) {
+                "Unknown"
+            }
         }
     }
 }
