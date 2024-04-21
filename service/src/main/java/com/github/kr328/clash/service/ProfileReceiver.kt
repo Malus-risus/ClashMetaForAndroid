@@ -6,8 +6,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.getSystemService
+import com.github.kr328.clash.common.GlobalScope
 import com.github.kr328.clash.common.constants.Intents
-import com.github.kr328.clash.service.data.Imported
 import com.github.kr328.clash.service.data.ImportedDao
 import com.github.kr328.clash.service.util.importedDir
 import kotlinx.coroutines.CoroutineScope
@@ -15,14 +15,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class ProfileReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> rescheduleAll(context)
-            Intents.ACTION_PROFILE_REQUEST_UPDATE -> redirectUpdate(context)
+            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> rescheduleUpdate(context)
+            Intents.ACTION_PROFILE_REQUEST_UPDATE -> requestProfileUpdate(context, intent)
         }
     }
 
@@ -30,44 +31,49 @@ class ProfileReceiver : BroadcastReceiver() {
         private val lock = Mutex()
         private var initialized = false
 
-        private fun rescheduleAll(context: Context) = CoroutineScope(Dispatchers.Default).launch {
+        fun rescheduleUpdate(context: Context) = CoroutineScope(Dispatchers.Default).launch {
             lock.withLock {
                 if (!initialized) {
                     initialized = true
-                    val profiles = ImportedDao().queryAllProfiles() // Assuming this method exists and returns a list of profiles
-                    profiles.forEach { profile ->
-                        scheduleNext(context, profile)
+                    ImportedDao().queryAllProfiles().forEach {
+                        scheduleNext(context, it)
                     }
                 }
             }
         }
 
-        private fun redirectUpdate(context: Context) {
-            val intent = Intent(Intents.ACTION_PROFILE_SCHEDULE_UPDATES)
-            context.startForegroundService(intent)
+        fun requestProfileUpdate(context: Context, intent: Intent) {
+            val redirect = Intent(Intents.ACTION_PROFILE_SCHEDULE_UPDATES)
+            context.startService(redirect)
         }
 
-        private fun scheduleNext(context: Context, imported: Imported) = CoroutineScope(Dispatchers.Default).launch {
+        fun cancelNext(context: Context, imported: Imported) {
+            context.alarmManager?.cancel(pendingIntentOf(context, imported))
+        }
+
+        fun scheduleNext(context: Context, imported: Imported) {
             lock.withLock {
-                if (imported.interval < TimeUnit.MINUTES.toMillis(15)) return@withLock
-
-                val configFile = context.importedDir.resolve(imported.uuid.toString()).resolve("config.yaml")
-                if (!configFile.exists()) return@withLock
-
-                val lastModified = configFile.lastModified()
-                val currentTime = System.currentTimeMillis()
                 val interval = imported.interval
-                val scheduleTime = currentTime + (interval - (currentTime - lastModified)).coerceAtLeast(0)
+                if (interval < TimeUnit.MINUTES.toMillis(15)) return
 
-                val intent = pendingIntentOf(context, imported)
-                context.getSystemService<AlarmManager>()?.set(AlarmManager.RTC_WAKEUP, scheduleTime, intent)
+                with(context.importedDir.resolve(imported.uuid.toString()).resolve("config.yaml")) {
+                    if (!this.exists()) return
+                    val nextUpdateTime = lastModified() + interval
+                    val delay = (nextUpdateTime - System.currentTimeMillis()).coerceAtLeast(0)
+
+                    context.alarmManager?.set(
+                        AlarmManager.RTC,
+                        System.currentTimeMillis() + delay,
+                        pendingIntentOf(context, imported)
+                    )
+                }
             }
         }
+        
+        private val Context.alarmManager get() = getSystemService<AlarmManager>()
 
         private fun pendingIntentOf(context: Context, imported: Imported): PendingIntent {
-            val intent = Intent(Intents.ACTION_PROFILE_REQUEST_UPDATE).apply {
-                putExtra("uuid", imported.uuid.toString())
-            }
+            val intent = Intent(Intents.ACTION_PROFILE_REQUEST_UPDATE)
             val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             return PendingIntent.getBroadcast(context, 0, intent, flags)
         }
