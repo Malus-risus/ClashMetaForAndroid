@@ -6,76 +6,101 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.getSystemService
-import com.github.kr328.clash.common.GlobalScope
+import com.github.kr328.clash.common.Global
+import com.github.kr328.clash.common.compat.pendingIntentFlags
+import com.github.kr328.clash.common.compat.startForegroundServiceCompat
 import com.github.kr328.clash.common.constants.Intents
+import com.github.kr328.clash.common.log.Log
+import com.github.kr328.clash.common.util.componentName
+import com.github.kr328.clash.common.util.setUUID
+import com.github.kr328.clash.service.data.Imported
 import com.github.kr328.clash.service.data.ImportedDao
+import com.github.kr328.clash.service.model.Profile
 import com.github.kr328.clash.service.util.importedDir
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.io.File
 import java.util.concurrent.TimeUnit
 
 class ProfileReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED,
-            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> rescheduleUpdate(context)
-            Intents.ACTION_PROFILE_REQUEST_UPDATE -> requestProfileUpdate(context, intent)
+            Intent.ACTION_TIMEZONE_CHANGED, Intent.ACTION_TIME_CHANGED -> {
+                Global.launch {
+                    Companion.reset()
+                    Companion.rescheduleAll(context)
+                    val serviceIntent = Intent(Intents.ACTION_PROFILE_SCHEDULE_UPDATES)
+                        .setComponent(profileWorkerComponentName)
+                    context.startForegroundServiceCompat(serviceIntent)
+                }
+            }
+            Intents.ACTION_PROFILE_REQUEST_UPDATE -> {
+                val redirectIntent = intent.setComponent(profileWorkerComponentName)
+                context.startForegroundServiceCompat(redirectIntent)
+            }
         }
     }
 
     companion object {
         private val lock = Mutex()
-        private var initialized = false
+        private var initialized: Boolean by lazy { false }
+        private val profileReceiverComponentName = ProfileReceiver::class.componentName
+        private val profileWorkerComponentName = ProfileWorker::class.componentName
+        private val alarmManager by lazy { Global.application.getSystemService<AlarmManager>() }
 
-        fun rescheduleUpdate(context: Context) = CoroutineScope(Dispatchers.Default).launch {
-            lock.withLock {
-                if (!initialized) {
-                    initialized = true
-                    ImportedDao().queryAllProfiles().forEach {
-                        scheduleNext(context, it)
-                    }
-                }
-            }
-        }
+        suspend fun rescheduleAll(context: Context) = lock.withLock {
+            if (initialized) return
+            initialized = true
 
-        fun requestProfileUpdate(context: Context, intent: Intent) {
-            val redirect = Intent(Intents.ACTION_PROFILE_SCHEDULE_UPDATES)
-            context.startService(redirect)
+            Log.i("Reschedule all profiles update")
+
+            val profiles = ImportedDao().queryAllUUIDs()
+                .mapNotNull { ImportedDao().queryByUUID(it) }
+                .filter { it.type != Profile.Type.File }
+
+            profiles.forEach { scheduleNext(context, it) }
         }
 
         fun cancelNext(context: Context, imported: Imported) {
-            context.alarmManager?.cancel(pendingIntentOf(context, imported))
+            val intent = pendingIntentOf(context, imported)
+            alarmManager?.cancel(intent)
         }
 
         fun scheduleNext(context: Context, imported: Imported) {
-            lock.withLock {
-                val interval = imported.interval
-                if (interval < TimeUnit.MINUTES.toMillis(15)) return
+            val intent = pendingIntentOf(context, imported)
 
-                with(context.importedDir.resolve(imported.uuid.toString()).resolve("config.yaml")) {
-                    if (!this.exists()) return
-                    val nextUpdateTime = lastModified() + interval
-                    val delay = (nextUpdateTime - System.currentTimeMillis()).coerceAtLeast(0)
+            if (imported.interval < TimeUnit.MINUTES.toMillis(15))
+                return
 
-                    context.alarmManager?.set(
-                        AlarmManager.RTC,
-                        System.currentTimeMillis() + delay,
-                        pendingIntentOf(context, imported)
-                    )
-                }
-            }
+            val current = System.currentTimeMillis()
+            val last = context.importedDir
+                .resolve(imported.uuid.toString())
+                .resolve("config.yaml")
+                .lastModified()
+
+            // file not existed
+            if (last < 0)
+                return
+
+            val interval = (imported.interval - (current - last)).coerceAtLeast(0)
+            alarmManager?.set(AlarmManager.RTC, current + interval, intent)
         }
-        
-        private val Context.alarmManager get() = getSystemService<AlarmManager>()
+
+        private suspend fun reset() {
+            initialized = false
+        }
 
         private fun pendingIntentOf(context: Context, imported: Imported): PendingIntent {
             val intent = Intent(Intents.ACTION_PROFILE_REQUEST_UPDATE)
-            val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            return PendingIntent.getBroadcast(context, 0, intent, flags)
+                .setComponent(profileReceiverComponentName)
+                .setUUID(imported.uuid)
+            return PendingIntent.getBroadcast(
+                context,
+                imported.uuid.hashCode(),
+                intent,
+                pendingIntentFlags(PendingIntent.FLAG_UPDATE_CURRENT)
+            )
         }
     }
 }
