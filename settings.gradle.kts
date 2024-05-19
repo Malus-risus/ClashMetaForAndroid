@@ -29,7 +29,7 @@ dependencyResolutionManagement {
             val appcompat = "1.4.2"
             val coordinator = "1.2.0"
             val recyclerview = "1.2.1"
-            val viewpager = "1.0.0"
+            val viewpager = "1.1.0"
             val material = "1.6.1"
             val serialization = "1.3.3"
             val kaidl = "1.15"
