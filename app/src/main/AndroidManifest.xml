@@ -29,7 +29,8 @@
         android:supportsRtl="true"
         android:theme="@style/BootstrapTheme"
         tools:ignore="GoogleAppIndexingWarning"
-        tools:targetApi="N">
+        tools:targetApi="N"
+        android:enableOnBackInvokedCallback="true">
         <meta-data
             android:name="releaseName"
             android:value="@string/release_name" />
